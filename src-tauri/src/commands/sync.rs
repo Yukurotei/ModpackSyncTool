@@ -87,6 +87,7 @@ pub struct ModpackListItem {
     pub modpack: CachedModpack,
     pub synced_version: Option<u32>,
     pub excluded_count: usize,
+    pub destination_path: Option<String>,
 }
 
 #[tauri::command]
@@ -100,7 +101,8 @@ pub fn list_modpacks(app: tauri::AppHandle) -> Result<Vec<ModpackListItem>, Stri
             let excluded_count =
                 db::list_exclusions(&conn, &m.owner, &m.repo, &m.modpack_id)?.len();
             out.push(ModpackListItem {
-                synced_version: state.map(|s| s.synced_version),
+                synced_version: state.as_ref().map(|s| s.synced_version),
+                destination_path: state.map(|s| s.destination_path),
                 excluded_count,
                 modpack: m,
             });
@@ -225,7 +227,7 @@ pub fn delete_synced_file(
         let Some(state) = db::get_sync_state(&conn, &owner, &repo, &modpack_id)? else {
             return Ok(false);
         };
-        let path = PathBuf::from(&state.destination_path).join(&filename);
+        let path = PathBuf::from(&state.destination_path).join("mods").join(&filename);
         if path.exists() {
             fs::remove_file(&path)?;
             Ok(true)
@@ -323,8 +325,9 @@ async fn preview_sync_impl(
     core_zip::extract_all(&zip_path, &extracted_dir)?;
     let _ = fs::remove_file(&zip_path);
 
-    fs::create_dir_all(&destination_path)?;
-    let local_files = mods_folder::scan(std::path::Path::new(&destination_path))?;
+    let mods_dir = PathBuf::from(&destination_path).join("mods");
+    fs::create_dir_all(&mods_dir)?;
+    let local_files = mods_folder::scan(&mods_dir)?;
     let plan = diff::compute_plan(&manifest, &exclusions, &local_files, &previously_synced);
 
     let preview = SyncPreview {
@@ -382,7 +385,7 @@ fn apply_sync_impl(
             message: "sync session expired or already applied — preview again".to_string(),
         })?;
 
-    let dest = PathBuf::from(&pending.destination_path);
+    let dest = PathBuf::from(&pending.destination_path).join("mods");
     apply::apply_plan(&pending.plan, &pending.extracted_dir, &dest)?;
     let _ = fs::remove_dir_all(&pending.extracted_dir);
 

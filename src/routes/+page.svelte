@@ -159,7 +159,11 @@
     mods_asset: string;
     updated_at: string;
   };
-  type ModpackListItem = CachedModpack & { synced_version: number | null; excluded_count: number };
+  type ModpackListItem = CachedModpack & {
+    synced_version: number | null;
+    excluded_count: number;
+    destination_path: string | null;
+  };
   type SyncPreview = {
     session_id: string;
     to_add: string[];
@@ -259,10 +263,22 @@
     return "current";
   }
 
-  async function startSync(m: ModpackListItem) {
+  async function pickInstanceFolder(m: ModpackListItem) {
+    return open({
+      directory: true,
+      multiple: false,
+      title: `Select your instance folder for ${m.name} (the one that should contain a mods/ folder)`,
+    });
+  }
+
+  async function startSync(m: ModpackListItem, forceNewLocation = false) {
     const key = modpackKey(m);
-    const destination = await open({ directory: true, multiple: false, title: `Sync destination for ${m.name}` });
-    if (!destination || Array.isArray(destination)) return;
+    let destination: string | null = !forceNewLocation ? m.destination_path : null;
+    if (!destination) {
+      const picked = await pickInstanceFolder(m);
+      if (!picked || Array.isArray(picked)) return;
+      destination = picked;
+    }
 
     syncBusy = { ...syncBusy, [key]: true };
     syncStatus = { ...syncStatus, [key]: "Fetching manifest and mod files..." };
@@ -580,6 +596,17 @@
                       <button type="button" class="secondary" onclick={() => toggleModsPanel(m)}>
                         {modFilesOpen[key] ? "Hide mods" : "Manage mods"}
                       </button>
+                      {#if m.destination_path}
+                        <button
+                          type="button"
+                          class="secondary"
+                          onclick={() => startSync(m, true)}
+                          disabled={syncBusy[key]}
+                          title={m.destination_path}
+                        >
+                          Change folder
+                        </button>
+                      {/if}
                       <button type="button" class="primary friend-btn" onclick={() => startSync(m)} disabled={syncBusy[key]}>
                         {syncBusy[key] ? "Working..." : "Sync"}
                       </button>
