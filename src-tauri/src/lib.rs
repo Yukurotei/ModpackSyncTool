@@ -1,0 +1,49 @@
+pub mod background;
+pub mod commands;
+pub mod core;
+pub mod db;
+pub mod error;
+pub mod github;
+pub mod state;
+
+use commands::publish::{clear_github_token, has_github_token, publish_modpack, set_github_token};
+use commands::sync::{
+    add_watched_repo, apply_sync, delete_synced_file, get_exclusions, get_modpack_files,
+    list_modpacks, list_watched_repos, preview_sync, refresh_repo, remove_watched_repo,
+    set_exclusion,
+};
+use state::AppState;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(AppState::default())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            background::tray::setup(&handle)?;
+            background::poller::spawn(handle);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            set_github_token,
+            has_github_token,
+            clear_github_token,
+            publish_modpack,
+            add_watched_repo,
+            remove_watched_repo,
+            list_watched_repos,
+            refresh_repo,
+            list_modpacks,
+            get_exclusions,
+            set_exclusion,
+            get_modpack_files,
+            delete_synced_file,
+            preview_sync,
+            apply_sync,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
