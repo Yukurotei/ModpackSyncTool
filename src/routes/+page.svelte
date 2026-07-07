@@ -59,13 +59,29 @@
   let modpackId = $state("");
   let modpackName = $state("");
   let description = $state("");
-  let owner = $state("");
-  let repo = $state("");
   let publishStatus = $state("");
   let publishing = $state(false);
+  let publishRepo = $state<{ owner: string; repo: string } | null>(null);
+  let publishRepoStatus = $state("");
+
+  async function loadPublishRepo() {
+    if (!hasToken) return;
+    publishRepoStatus = "Setting up your modpack repo...";
+    try {
+      publishRepo = await invoke<{ owner: string; repo: string }>("get_or_create_publish_repo");
+      publishRepoStatus = "";
+    } catch (e) {
+      publishRepoStatus = `Error: ${e}`;
+    }
+  }
+
+  async function copyPublishRepo() {
+    if (!publishRepo) return;
+    await navigator.clipboard.writeText(`${publishRepo.owner}/${publishRepo.repo}`);
+  }
 
   async function browseInstancePath() {
-    const dir = await open({ directory: true, multiple: false, title: "Select your mods folder" });
+    const dir = await open({ directory: true, multiple: false, title: "Select your instance folder" });
     if (dir && !Array.isArray(dir)) instancePath = dir;
   }
 
@@ -84,16 +100,22 @@
         modpackId,
         name: modpackName,
         description,
-        owner,
-        repo,
       });
-      publishStatus = `Published ${result.tag} — ${result.mod_count} mods. Friends watching ${owner}/${repo} will see it.`;
+      const repoLabel = publishRepo ? `${publishRepo.owner}/${publishRepo.repo}` : "your repo";
+      publishStatus = `Published ${result.tag} — ${result.mod_count} mods. Friends watching ${repoLabel} will see it.`;
+      await loadPublishRepo();
     } catch (e) {
       publishStatus = `Error: ${e}`;
     } finally {
       publishing = false;
     }
   }
+
+  $effect(() => {
+    if (activeTab === "publish" && hasToken && !publishRepo) {
+      loadPublishRepo();
+    }
+  });
 
   // ---------- Sync (friend) ----------
   type WatchedRepo = { owner: string; repo: string };
@@ -378,15 +400,33 @@
             </div>
           {/if}
 
+          {#if hasToken}
+            <div class="card repo-banner">
+              {#if publishRepo}
+                <div class="repo-banner-text">
+                  <span class="hint">Your modpacks live in</span>
+                  <code>{publishRepo.owner}/{publishRepo.repo}</code>
+                  <span class="hint">— share this with friends so they can watch it.</span>
+                </div>
+                <button type="button" class="secondary" onclick={copyPublishRepo}>
+                  <Icon name="check" size={14} /> Copy
+                </button>
+              {:else}
+                <span class="hint">{publishRepoStatus || "Setting up your modpack repo..."}</span>
+              {/if}
+            </div>
+          {/if}
+
           <form class="card form" onsubmit={publish}>
             <div class="field">
-              <label for="instancePath">Mods folder</label>
+              <label for="instancePath">Instance folder</label>
               <div class="field-row">
-                <input id="instancePath" placeholder="Folder containing your mods/" bind:value={instancePath} required />
+                <input id="instancePath" placeholder="Folder that contains your mods/ subfolder" bind:value={instancePath} required />
                 <button type="button" class="secondary" onclick={browseInstancePath}>
                   <Icon name="folder" size={15} /> Browse
                 </button>
               </div>
+              <span class="hint">The launcher instance folder — the one with a <code>mods</code> folder inside it, not the mods folder itself.</span>
             </div>
 
             <div class="field-grid">
@@ -404,17 +444,6 @@
             <div class="field">
               <label for="description">Description</label>
               <input id="description" placeholder="Our exploration/tech pack" bind:value={description} />
-            </div>
-
-            <div class="field-grid">
-              <div class="field">
-                <label for="owner">GitHub owner</label>
-                <input id="owner" placeholder="yourname" bind:value={owner} required />
-              </div>
-              <div class="field">
-                <label for="repo">GitHub repo</label>
-                <input id="repo" placeholder="modpack-name" bind:value={repo} required />
-              </div>
             </div>
 
             <button type="submit" class="primary host-btn" disabled={publishing}>

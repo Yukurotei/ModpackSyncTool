@@ -16,6 +16,8 @@ pub type CoreResult<T> = Result<T, CoreError>;
 pub enum GitHubError {
     #[error("no GitHub token configured — add one in Settings")]
     MissingToken,
+    #[error("no \"mods\" folder found in \"{0}\" — are you sure this is your instance folder? (It should be the folder that contains a mods/ subfolder, not the mods folder itself.)")]
+    ModsFolderNotFound(String),
     #[error("GitHub API error ({status}): {message}")]
     Api { status: u16, message: String },
     #[error("io error: {0}")]

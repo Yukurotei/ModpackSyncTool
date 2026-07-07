@@ -116,6 +116,45 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Checks whether `owner/repo` exists and is reachable with `token`.
+    pub async fn repo_exists(&self, token: &str, owner: &str, repo: &str) -> GhResult<bool> {
+        let url = format!("https://api.github.com/repos/{owner}/{repo}");
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", API_VERSION)
+            .send()
+            .await?;
+        Ok(resp.status().is_success())
+    }
+
+    /// Creates a new repo owned by the authenticated user, pre-initialized
+    /// with a first commit (`auto_init: true`) so releases can be created
+    /// against it immediately — GitHub's Releases API requires an existing
+    /// default branch, which an empty repo doesn't have.
+    pub async fn create_repo(&self, token: &str, name: &str, description: &str) -> GhResult<()> {
+        let url = "https://api.github.com/user/repos";
+        let body = json!({
+            "name": name,
+            "description": description,
+            "private": false,
+            "auto_init": true,
+        });
+        let resp = self
+            .http
+            .post(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", API_VERSION)
+            .json(&body)
+            .send()
+            .await?;
+        check_status(resp).await?;
+        Ok(())
+    }
+
     /// Reads a file from the repo's default branch via the Contents API.
     /// `token` is optional — friend-side reads should stay anonymous, though
     /// in practice friends fetch `index.json`/`manifest.json` via the raw

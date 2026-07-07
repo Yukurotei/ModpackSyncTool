@@ -1,4 +1,5 @@
 use crate::core::{manifest::Manifest, mods_folder, zip as core_zip};
+use crate::db;
 use crate::error::{GhResult, GitHubError};
 use crate::github::auth;
 use crate::github::client::GitHubClient;
@@ -7,16 +8,92 @@ use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 
-#[tauri::command]
-pub async fn set_github_token(token: String) -> Result<String, String> {
-    set_github_token_impl(token).await.map_err(|e| e.to_string())
+/// Fixed name for the single repo we auto-create per host to hold all of
+/// their modpacks (each modpack is its own set of tagged releases inside
+/// it, tracked via one shared `index.json` — see `github/index.rs`).
+const PUBLISH_REPO_NAME: &str = "modpacksync-modpacks";
+
+fn db_path(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .expect("app data dir should be resolvable");
+    dir.join("modpacksync.sqlite3")
 }
 
-async fn set_github_token_impl(token: String) -> GhResult<String> {
+fn open_db(app: &tauri::AppHandle) -> GhResult<rusqlite::Connection> {
+    Ok(db::open(&db_path(app))?)
+}
+
+#[tauri::command]
+pub async fn set_github_token(app: tauri::AppHandle, token: String) -> Result<String, String> {
+    set_github_token_impl(app, token)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn set_github_token_impl(app: tauri::AppHandle, token: String) -> GhResult<String> {
     let client = GitHubClient::new();
     let login = client.validate_token(&token).await?;
     auth::store_token(&token)?;
+    let conn = open_db(&app)?;
+    db::set_setting(&conn, "github_login", &login)?;
     Ok(login)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishRepo {
+    pub owner: String,
+    pub repo: String,
+}
+
+/// Resolves the one repo this host publishes all their modpacks into,
+/// creating it on GitHub (pre-initialized so releases can target it right
+/// away) the first time this is called, then remembering the choice.
+#[tauri::command]
+pub async fn get_or_create_publish_repo(app: tauri::AppHandle) -> Result<PublishRepo, String> {
+    get_or_create_publish_repo_impl(app)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn get_or_create_publish_repo_impl(app: tauri::AppHandle) -> GhResult<PublishRepo> {
+    let conn = open_db(&app)?;
+    if let (Some(owner), Some(repo)) = (
+        db::get_setting(&conn, "publish_repo_owner")?,
+        db::get_setting(&conn, "publish_repo_name")?,
+    ) {
+        return Ok(PublishRepo { owner, repo });
+    }
+
+    let token = auth::get_token()?.ok_or(GitHubError::MissingToken)?;
+    let client = GitHubClient::new();
+    let owner = match db::get_setting(&conn, "github_login")? {
+        Some(login) => login,
+        None => {
+            let login = client.validate_token(&token).await?;
+            db::set_setting(&conn, "github_login", &login)?;
+            login
+        }
+    };
+
+    if !client.repo_exists(&token, &owner, PUBLISH_REPO_NAME).await? {
+        client
+            .create_repo(
+                &token,
+                PUBLISH_REPO_NAME,
+                "My ModpackSync modpacks — managed by the ModpackSync app.",
+            )
+            .await?;
+    }
+
+    db::set_setting(&conn, "publish_repo_owner", &owner)?;
+    db::set_setting(&conn, "publish_repo_name", PUBLISH_REPO_NAME)?;
+    Ok(PublishRepo {
+        owner,
+        repo: PUBLISH_REPO_NAME.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -39,30 +116,32 @@ pub struct PublishResult {
 
 #[tauri::command]
 pub async fn publish_modpack(
+    app: tauri::AppHandle,
     instance_path: String,
     modpack_id: String,
     name: String,
     description: String,
-    owner: String,
-    repo: String,
 ) -> Result<PublishResult, String> {
-    publish_impl(instance_path, modpack_id, name, description, owner, repo)
+    publish_impl(app, instance_path, modpack_id, name, description)
         .await
         .map_err(|e| e.to_string())
 }
 
 async fn publish_impl(
+    app: tauri::AppHandle,
     instance_path: String,
     modpack_id: String,
     name: String,
     description: String,
-    owner: String,
-    repo: String,
 ) -> GhResult<PublishResult> {
     let token = auth::get_token()?.ok_or(GitHubError::MissingToken)?;
+    let PublishRepo { owner, repo } = get_or_create_publish_repo_impl(app).await?;
     let client = GitHubClient::new();
 
     let mods_dir = PathBuf::from(&instance_path).join("mods");
+    if !mods_dir.is_dir() {
+        return Err(GitHubError::ModsFolderNotFound(instance_path));
+    }
     let files = mods_folder::scan(&mods_dir)?;
 
     let (mut index, mut index_sha) = fetch_index(&client, &owner, &repo).await?;
