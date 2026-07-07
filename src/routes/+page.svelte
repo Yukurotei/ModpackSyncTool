@@ -63,6 +63,15 @@
   let publishing = $state(false);
   let publishRepo = $state<{ owner: string; repo: string } | null>(null);
   let publishRepoStatus = $state("");
+  type PublishedModpack = {
+    id: string;
+    name: string;
+    description: string;
+    latest_version: number;
+    instance_path: string | null;
+  };
+  let publishedModpacks = $state<PublishedModpack[]>([]);
+  let selectedExisting = $state("");
 
   async function loadPublishRepo() {
     if (!hasToken) return;
@@ -70,8 +79,27 @@
     try {
       publishRepo = await invoke<{ owner: string; repo: string }>("get_or_create_publish_repo");
       publishRepoStatus = "";
+      publishedModpacks = await invoke<PublishedModpack[]>("list_published_modpacks");
     } catch (e) {
       publishRepoStatus = `Error: ${e}`;
+    }
+  }
+
+  function selectExisting(id: string) {
+    selectedExisting = id;
+    if (!id) {
+      modpackId = "";
+      modpackName = "";
+      description = "";
+      instancePath = "";
+      return;
+    }
+    const m = publishedModpacks.find((p) => p.id === id);
+    if (m) {
+      modpackId = m.id;
+      modpackName = m.name;
+      description = m.description;
+      instancePath = m.instance_path ?? "";
     }
   }
 
@@ -417,6 +445,26 @@
             </div>
           {/if}
 
+          {#if publishedModpacks.length > 0}
+            <div class="card field">
+              <label for="existingModpack">Modpack</label>
+              <div class="select-wrap">
+                <select
+                  id="existingModpack"
+                  value={selectedExisting}
+                  onchange={(e) => selectExisting((e.target as HTMLSelectElement).value)}
+                >
+                  <option value="">+ New modpack</option>
+                  {#each publishedModpacks as m (m.id)}
+                    <option value={m.id}>{m.name} (v{m.latest_version})</option>
+                  {/each}
+                </select>
+                <Icon name="chevron-down" size={14} />
+              </div>
+              <span class="hint">Pick one to publish a new version, or start a new modpack.</span>
+            </div>
+          {/if}
+
           <form class="card form" onsubmit={publish}>
             <div class="field">
               <label for="instancePath">Instance folder</label>
@@ -432,7 +480,13 @@
             <div class="field-grid">
               <div class="field">
                 <label for="modpackId">Modpack ID</label>
-                <input id="modpackId" placeholder="dragonic-adventure" bind:value={modpackId} required />
+                <input
+                  id="modpackId"
+                  placeholder="dragonic-adventure"
+                  bind:value={modpackId}
+                  disabled={!!selectedExisting}
+                  required
+                />
                 <span class="hint">Lowercase, no spaces — used internally.</span>
               </div>
               <div class="field">

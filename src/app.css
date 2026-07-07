@@ -282,6 +282,38 @@ body {
     box-shadow: var(--shadow-glow-friend);
   }
 
+  .select-wrap {
+    position: relative;
+  }
+
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.55rem 2rem 0.55rem 0.7rem;
+    font-size: 0.92rem;
+    color: var(--text);
+    transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  }
+
+  select:focus {
+    border-color: var(--friend);
+    box-shadow: var(--shadow-glow-friend);
+  }
+
+  .select-wrap > svg {
+    position: absolute;
+    right: 0.7rem;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: var(--text-dim);
+  }
+
   button {
     font-size: 0.88rem;
     border-radius: var(--radius-sm);

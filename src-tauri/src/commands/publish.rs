@@ -96,6 +96,42 @@ async fn get_or_create_publish_repo_impl(app: tauri::AppHandle) -> GhResult<Publ
     })
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishedModpack {
+    #[serde(flatten)]
+    pub entry: ModpackIndexEntry,
+    /// Last instance folder used to publish this modpack, remembered
+    /// locally (never written to the shared `index.json` — it's a local
+    /// filesystem path, not something friends need or should see).
+    pub instance_path: Option<String>,
+}
+
+fn instance_path_key(modpack_id: &str) -> String {
+    format!("instance_path:{modpack_id}")
+}
+
+/// Lists modpacks already published to this host's repo, so the publish
+/// form can offer "update an existing one" instead of always starting fresh.
+#[tauri::command]
+pub async fn list_published_modpacks(app: tauri::AppHandle) -> Result<Vec<PublishedModpack>, String> {
+    list_published_modpacks_impl(app).await.map_err(|e| e.to_string())
+}
+
+async fn list_published_modpacks_impl(app: tauri::AppHandle) -> GhResult<Vec<PublishedModpack>> {
+    let PublishRepo { owner, repo } = get_or_create_publish_repo_impl(app.clone()).await?;
+    let client = GitHubClient::new();
+    let (index, _) = fetch_index(&client, &owner, &repo).await?;
+    let conn = open_db(&app)?;
+    index
+        .modpacks
+        .into_iter()
+        .map(|entry| {
+            let instance_path = db::get_setting(&conn, &instance_path_key(&entry.id))?;
+            Ok(PublishedModpack { entry, instance_path })
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn has_github_token() -> bool {
     auth::get_token().ok().flatten().is_some()
@@ -135,7 +171,7 @@ async fn publish_impl(
     description: String,
 ) -> GhResult<PublishResult> {
     let token = auth::get_token()?.ok_or(GitHubError::MissingToken)?;
-    let PublishRepo { owner, repo } = get_or_create_publish_repo_impl(app).await?;
+    let PublishRepo { owner, repo } = get_or_create_publish_repo_impl(app.clone()).await?;
     let client = GitHubClient::new();
 
     let mods_dir = PathBuf::from(&instance_path).join("mods");
@@ -143,6 +179,11 @@ async fn publish_impl(
         return Err(GitHubError::ModsFolderNotFound(instance_path));
     }
     let files = mods_folder::scan(&mods_dir)?;
+
+    {
+        let conn = open_db(&app)?;
+        db::set_setting(&conn, &instance_path_key(&modpack_id), &instance_path)?;
+    }
 
     let (mut index, mut index_sha) = fetch_index(&client, &owner, &repo).await?;
     let next_version = index

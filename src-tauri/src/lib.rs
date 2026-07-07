@@ -7,8 +7,8 @@ pub mod github;
 pub mod state;
 
 use commands::publish::{
-    clear_github_token, get_or_create_publish_repo, has_github_token, publish_modpack,
-    set_github_token,
+    clear_github_token, get_or_create_publish_repo, has_github_token, list_published_modpacks,
+    publish_modpack, set_github_token,
 };
 use commands::sync::{
     add_watched_repo, apply_sync, delete_synced_file, get_exclusions, get_modpack_files,
@@ -35,6 +35,7 @@ pub fn run() {
             has_github_token,
             clear_github_token,
             get_or_create_publish_repo,
+            list_published_modpacks,
             publish_modpack,
             add_watched_repo,
             remove_watched_repo,
