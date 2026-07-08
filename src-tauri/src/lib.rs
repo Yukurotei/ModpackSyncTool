@@ -11,9 +11,9 @@ use commands::publish::{
     publish_modpack, set_github_token,
 };
 use commands::sync::{
-    add_watched_repo, apply_sync, delete_synced_file, get_exclusions, get_modpack_files,
-    list_modpacks, list_watched_repos, preview_sync, refresh_repo, remove_watched_repo,
-    set_exclusion,
+    add_watched_repo, apply_sync, delete_synced_file, get_auto_sync_enabled, get_exclusions,
+    get_modpack_files, list_modpacks, list_watched_repos, preview_sync, refresh_repo,
+    remove_watched_repo, set_auto_sync_enabled, set_exclusion,
 };
 use state::AppState;
 use tauri::Manager;
@@ -58,6 +58,8 @@ pub fn run() {
             delete_synced_file,
             preview_sync,
             apply_sync,
+            get_auto_sync_enabled,
+            set_auto_sync_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

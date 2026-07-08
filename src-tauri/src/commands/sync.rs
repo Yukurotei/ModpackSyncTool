@@ -52,6 +52,26 @@ pub fn list_watched_repos(app: tauri::AppHandle) -> Result<Vec<WatchedRepo>, Str
     db::list_watched_repos(&conn).map_err(|e| e.to_string())
 }
 
+/// Global toggle for automatic syncing, default off. When on, the
+/// background poller applies updates immediately (for any modpack that's
+/// already been synced at least once, so a destination is known) instead
+/// of only notifying and waiting for a manual sync.
+#[tauri::command]
+pub fn get_auto_sync_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    let conn = open_db(&app).map_err(|e| e.to_string())?;
+    Ok(db::get_setting(&conn, "auto_sync_enabled")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some("1"))
+}
+
+#[tauri::command]
+pub fn set_auto_sync_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let conn = open_db(&app).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "auto_sync_enabled", if enabled { "1" } else { "0" })
+        .map_err(|e| e.to_string())
+}
+
 /// Anonymously re-fetches `index.json` for one watched repo and refreshes
 /// its rows in the local modpack cache.
 #[tauri::command]
@@ -261,16 +281,18 @@ pub async fn preview_sync(
         .map_err(|e| e.to_string())
 }
 
-async fn preview_sync_impl(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    owner: String,
-    repo: String,
-    modpack_id: String,
-    destination_path: String,
-) -> GhResult<SyncPreview> {
+/// Fetches the manifest + mods zip for a modpack and computes the diff
+/// against `destination_path`, without touching any pending-sync state —
+/// shared by the manual preview flow and the automatic-sync path.
+async fn fetch_and_diff(
+    app: &tauri::AppHandle,
+    owner: &str,
+    repo: &str,
+    modpack_id: &str,
+    destination_path: &str,
+) -> GhResult<(diff::SyncPlan, Manifest, PathBuf)> {
     let (entry, exclusions, previously_synced) = {
-        let conn = open_db(&app)?;
+        let conn = open_db(app)?;
         let entry = db::list_cached_modpacks(&conn)?
             .into_iter()
             .find(|m| m.owner == owner && m.repo == repo && m.modpack_id == modpack_id)
@@ -279,8 +301,8 @@ async fn preview_sync_impl(
                 message: "modpack not found in local cache — refresh the repo first".to_string(),
             })?;
         let exclusions: HashSet<String> =
-            db::list_exclusions(&conn, &owner, &repo, &modpack_id)?.into_iter().collect();
-        let previously_synced: HashSet<String> = db::get_sync_state(&conn, &owner, &repo, &modpack_id)?
+            db::list_exclusions(&conn, owner, repo, modpack_id)?.into_iter().collect();
+        let previously_synced: HashSet<String> = db::get_sync_state(&conn, owner, repo, modpack_id)?
             .map(|s| {
                 serde_json::from_str::<Manifest>(&s.synced_manifest_json)
                     .map(|m| m.files.into_iter().map(|f| f.path).collect())
@@ -292,7 +314,7 @@ async fn preview_sync_impl(
 
     let client = GitHubClient::new();
     let assets = client
-        .get_release_by_tag(&owner, &repo, &entry.latest_tag)
+        .get_release_by_tag(owner, repo, &entry.latest_tag)
         .await?;
     let manifest_asset = assets
         .iter()
@@ -325,10 +347,30 @@ async fn preview_sync_impl(
     core_zip::extract_all(&zip_path, &extracted_dir)?;
     let _ = fs::remove_file(&zip_path);
 
-    let mods_dir = PathBuf::from(&destination_path).join("mods");
+    let mods_dir = PathBuf::from(destination_path).join("mods");
     fs::create_dir_all(&mods_dir)?;
     let local_files = mods_folder::scan(&mods_dir)?;
     let plan = diff::compute_plan(&manifest, &exclusions, &local_files, &previously_synced);
+
+    Ok((plan, manifest, extracted_dir))
+}
+
+async fn preview_sync_impl(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    repo: String,
+    modpack_id: String,
+    destination_path: String,
+) -> GhResult<SyncPreview> {
+    let (plan, manifest, extracted_dir) =
+        fetch_and_diff(&app, &owner, &repo, &modpack_id, &destination_path).await?;
+
+    let session_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .to_string();
 
     let preview = SyncPreview {
         session_id: session_id.clone(),
@@ -352,6 +394,45 @@ async fn preview_sync_impl(
     );
 
     Ok(preview)
+}
+
+/// Fetches, diffs, and immediately applies a sync with no manual preview
+/// step — used by the background poller when auto-sync is enabled for a
+/// modpack the friend has already synced at least once before (so a
+/// destination folder is already known).
+pub async fn auto_sync_modpack(
+    app: &tauri::AppHandle,
+    owner: &str,
+    repo: &str,
+    modpack_id: &str,
+    destination_path: &str,
+) -> GhResult<SyncResult> {
+    let (plan, manifest, extracted_dir) =
+        fetch_and_diff(app, owner, repo, modpack_id, destination_path).await?;
+
+    let dest = PathBuf::from(destination_path).join("mods");
+    apply::apply_plan(&plan, &extracted_dir, &dest)?;
+    let _ = fs::remove_dir_all(&extracted_dir);
+
+    let exclusions: HashSet<String> = plan.excluded.iter().cloned().collect();
+    let synced_manifest = manifest.without_excluded(&exclusions);
+
+    let conn = open_db(app)?;
+    db::set_sync_state(
+        &conn,
+        owner,
+        repo,
+        modpack_id,
+        destination_path,
+        manifest.version,
+        &serde_json::to_string(&synced_manifest)?,
+    )?;
+
+    Ok(SyncResult {
+        added: plan.to_add.len(),
+        updated: plan.to_update.len(),
+        removed: plan.to_remove.len(),
+    })
 }
 
 #[derive(Debug, Serialize)]

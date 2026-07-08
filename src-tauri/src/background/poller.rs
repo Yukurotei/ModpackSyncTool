@@ -61,10 +61,35 @@ async fn poll_once(app: &AppHandle) -> GhResult<()> {
         db::replace_modpack_cache_for_repo(&mut conn, &r.owner, &r.repo, &index.modpacks)?;
         db::set_repo_etag(&conn, &r.owner, &r.repo, &new_etag)?;
 
+        let auto_sync_enabled =
+            db::get_setting(&conn, "auto_sync_enabled")?.as_deref() == Some("1");
+
         for entry in &index.modpacks {
             match previous.get(&entry.id) {
                 None => notify(app, entry, true),
-                Some(v) if *v < entry.latest_version => notify(app, entry, false),
+                Some(v) if *v < entry.latest_version => {
+                    let sync_state = db::get_sync_state(&conn, &r.owner, &r.repo, &entry.id)?;
+                    match (auto_sync_enabled, sync_state) {
+                        (true, Some(state)) => {
+                            match crate::commands::sync::auto_sync_modpack(
+                                app,
+                                &r.owner,
+                                &r.repo,
+                                &entry.id,
+                                &state.destination_path,
+                            )
+                            .await
+                            {
+                                Ok(_) => notify_synced(app, entry),
+                                Err(e) => {
+                                    eprintln!("[poller] auto-sync {}/{}/{}: {e}", r.owner, r.repo, entry.id);
+                                    notify(app, entry, false);
+                                }
+                            }
+                        }
+                        _ => notify(app, entry, false),
+                    }
+                }
                 _ => {}
             }
         }
@@ -81,5 +106,11 @@ fn notify(app: &AppHandle, entry: &ModpackIndexEntry, is_new: bool) {
         format!("{} updated", entry.name)
     };
     let body = format!("v{} is now available", entry.latest_version);
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+fn notify_synced(app: &AppHandle, entry: &ModpackIndexEntry) {
+    let title = format!("{} auto-synced", entry.name);
+    let body = format!("Updated to v{}", entry.latest_version);
     let _ = app.notification().builder().title(title).body(body).show();
 }

@@ -54,6 +54,20 @@
     await refreshTokenStatus();
   }
 
+  // ---------- Auto-sync ----------
+  let autoSyncEnabled = $state(false);
+
+  async function refreshAutoSync() {
+    autoSyncEnabled = await invoke<boolean>("get_auto_sync_enabled");
+  }
+  refreshAutoSync();
+
+  async function toggleAutoSync() {
+    const next = !autoSyncEnabled;
+    await invoke("set_auto_sync_enabled", { enabled: next });
+    autoSyncEnabled = next;
+  }
+
   // ---------- Publish (host) ----------
   let instancePath = $state("");
   let modpackId = $state("");
@@ -699,6 +713,22 @@
             <p class="status-line" class:error={isError(tokenStatus)}>
               {tokenStatus || (hasToken ? "A token is configured." : "No token configured yet.")}
             </p>
+          </div>
+
+          <div class="card">
+            <div class="settings-row">
+              <div>
+                <strong>Auto-sync</strong>
+                <p class="hint">
+                  Automatically apply updates in the background for modpacks you've already synced at least once —
+                  no need to click Sync yourself. Off by default.
+                </p>
+              </div>
+              <label class="switch">
+                <input type="checkbox" checked={autoSyncEnabled} onchange={toggleAutoSync} />
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+              </label>
+            </div>
           </div>
         {/if}
       </div>

@@ -620,6 +620,18 @@ body {
     text-decoration: line-through;
   }
 
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+  }
+
+  .settings-row .hint {
+    margin-top: 0.3rem;
+    max-width: 48ch;
+  }
+
   .switch {
     position: relative;
     display: inline-flex;
